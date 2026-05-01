@@ -1,0 +1,42 @@
+[project]
+name = "ocean-uptime"
+version = "0.1.0"
+description = "Checks the surf forecast and sends notifications when the conditions are good."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "Pillow>=11.0",
+  "loguru>=0.7",
+  "matplotlib>=3.10",
+  "pydantic>=2.11",
+  "python-dotenv>=1.1",
+  "requests>=2.32",
+  "slack-sdk>=3.41.0",
+  "tzdata>=2025",
+]
+
+[dependency-groups]
+dev = [
+  "pyright>=1.1",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "ruff>=0.11",
+  "types-requests>=2.32",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "PTH", "RUF"]
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+addopts = "--cov=good_surf --cov-report=term-missing"
+testpaths = ["tests"]
