@@ -146,6 +146,25 @@ def main() -> None:
         daylight_end_hour=args.daylight_end_hour,
         forecast_days=args.forecast_days,
     )
+
+    notifier = SlackNotifier(
+        channel_id=slack_channel,
+        client=WebClient(token=slack_token),
+        location_name=config.location_name,
+    )
+
+    try:
+        _run(args, config, api_key, notifier)
+    except Exception as exc:
+        logger.exception("Unhandled error — sending failure notification to Slack")
+        notifier.send_error(exc)
+        raise
+
+
+def _run(
+    args: argparse.Namespace, config: SurfConfig, api_key: str, notifier: SlackNotifier
+) -> None:
+    """Inner run function — separated so exceptions can be caught in main() for Slack reporting."""
     tz = ZoneInfo(config.timezone)
 
     now_utc = datetime.now(UTC)
@@ -189,10 +208,5 @@ def main() -> None:
     chart_gen = ChartGenerator()
     chart_path = chart_gen.generate(good_days[0], config)
 
-    notifier = SlackNotifier(
-        channel_id=slack_channel,
-        client=WebClient(token=slack_token),
-        location_name=config.location_name,
-    )
     notifier.send_alert(chart_path=chart_path, day_forecasts=good_days)
     logger.info("Surf alert sent successfully.")

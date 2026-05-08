@@ -8,6 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+import requests
 
 from good_surf.analysis import (
     analyze_forecasts,
@@ -410,6 +411,46 @@ def test_stormglass_client_source_fallback() -> None:
     assert points[0].wind_direction == 120.0  # sg=None, noaa fallback
 
 
+def test_stormglass_client_retries_on_timeout() -> None:
+    """fetch_forecast should retry on RequestException and succeed if a later attempt works."""
+
+    class FlakySession:
+        """Fails on the first call, succeeds on the second."""
+
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def get(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            params: dict[str, object],
+            timeout: int,
+        ) -> FakeResponse:
+            self.call_count += 1
+            if self.call_count == 1:
+                raise requests.exceptions.Timeout("timed out")
+            return FakeResponse(_FIXTURE_PAYLOAD)
+
+    session = FlakySession()
+    # Patch sleep so the test doesn't actually wait
+    import unittest.mock as mock
+
+    with mock.patch("good_surf.stormglass.time.sleep"):
+        client = StormglassClient(api_key="key", session=session)  # type: ignore[arg-type]
+        points = client.fetch_forecast(
+            start=datetime(2026, 1, 15, 0, 0, tzinfo=UTC),
+            end=datetime(2026, 1, 16, 0, 0, tzinfo=UTC),
+            lat=-31.9961,
+            lng=115.7537,
+            params=("swellHeight",),
+        )
+
+    assert session.call_count == 2
+    assert len(points) == 2
+
+
 # ---------------------------------------------------------------------------
 # analyze_forecasts integration
 # ---------------------------------------------------------------------------
@@ -564,6 +605,7 @@ class FakeWebClient:
 
     def __init__(self) -> None:
         self.upload_calls: list[dict[str, object]] = []
+        self.post_calls: list[dict[str, object]] = []
 
     def conversations_join(self, **kwargs: object) -> None:
         """No-op fake for conversations_join."""
@@ -572,6 +614,10 @@ class FakeWebClient:
         """Record the call and return a fake response."""
         self.upload_calls.append(kwargs)
         return FakeSlackFile()
+
+    def chat_postMessage(self, **kwargs: object) -> None:
+        """Record the call."""
+        self.post_calls.append(kwargs)
 
 
 def test_slack_notifier_calls_upload(tmp_path: Path) -> None:
@@ -596,3 +642,17 @@ def test_slack_notifier_calls_upload(tmp_path: Path) -> None:
     assert call["file"] == str(chart)
     assert "initial_comment" in call
     assert isinstance(call["initial_comment"], str)
+
+
+def test_slack_notifier_send_error_posts_message() -> None:
+    """SlackNotifier.send_error should call chat_postMessage with the error details."""
+    fake_client = FakeWebClient()
+    notifier = SlackNotifier(channel_id="C123", client=fake_client, location_name="Test Beach")  # type: ignore[arg-type]
+
+    notifier.send_error(ValueError("something broke"))
+
+    assert len(fake_client.post_calls) == 1
+    call = fake_client.post_calls[0]
+    assert call["channel"] == "C123"
+    assert "ValueError" in str(call["text"])
+    assert "something broke" in str(call["text"])

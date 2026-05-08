@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from loguru import logger
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from slack_sdk.web import SlackResponse
 
 from good_surf.analysis import degrees_to_cardinal
 from good_surf.exceptions import SlackNotificationError
@@ -106,3 +108,25 @@ class SlackNotifier:
             logger.info("Slack upload complete: file_id={fid}", fid=fid)
         except SlackApiError as exc:
             raise SlackNotificationError(f"Slack API error: {exc.response['error']}") from exc
+
+    def send_error(self, error: Exception) -> None:
+        """Post a plain-text error notification to Slack.
+
+        Swallows any secondary Slack errors so the original exception is not
+        masked and the caller can still log / re-raise it.
+
+        Args:
+            error: The exception that caused the run to fail.
+        """
+        text = f"*Surf alert run failed*\n\n```{type(error).__name__}: {error}```"
+        logger.info("Sending error notification to Slack channel {ch}", ch=self._channel_id)
+        try:
+            self._client.chat_postMessage(  # type: ignore[reportUnknownMemberType]
+                channel=self._channel_id,
+                text=text,
+            )
+        except SlackApiError as exc:
+            logger.warning(
+                "Could not send error notification to Slack: {err}",
+                err=cast(SlackResponse, exc.response).get("error"),
+            )

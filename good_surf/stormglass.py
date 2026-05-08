@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import cast
 
@@ -12,6 +13,8 @@ from good_surf.exceptions import StormglassAPIError
 from good_surf.models import WeatherDataPoint
 
 _STORMGLASS_ENDPOINT = "https://api.stormglass.io/v2/weather/point"
+_MAX_RETRIES = 3
+_RETRY_BACKOFF_S = (5, 15, 30)  # wait before attempt 2, 3, (then give up)
 
 
 class StormglassClient:
@@ -67,20 +70,38 @@ class StormglassClient:
             start=start.isoformat(),
             end=end.isoformat(),
         )
-        try:
-            response = self._session.get(
-                _STORMGLASS_ENDPOINT,
-                headers={"Authorization": self._api_key},
-                params=query_params,
-                timeout=30,
-            )
-            response.raise_for_status()
-        except requests.HTTPError as exc:
+
+        last_exc: Exception | None = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                response = self._session.get(
+                    _STORMGLASS_ENDPOINT,
+                    headers={"Authorization": self._api_key},
+                    params=query_params,
+                    timeout=60,
+                )
+                response.raise_for_status()
+                break  # success
+            except requests.HTTPError as exc:
+                raise StormglassAPIError(
+                    f"Stormglass HTTP error {exc.response.status_code}: {exc.response.text}"
+                ) from exc
+            except requests.RequestException as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    wait = _RETRY_BACKOFF_S[attempt - 1]
+                    logger.warning(
+                        "Stormglass request failed (attempt {a}/{total}), retrying in {w}s: {err}",
+                        a=attempt,
+                        total=_MAX_RETRIES,
+                        w=wait,
+                        err=exc,
+                    )
+                    time.sleep(wait)
+        else:
             raise StormglassAPIError(
-                f"Stormglass HTTP error {exc.response.status_code}: {exc.response.text}"
-            ) from exc
-        except requests.RequestException as exc:
-            raise StormglassAPIError(f"Stormglass request failed: {exc}") from exc
+                f"Stormglass request failed after {_MAX_RETRIES} attempts: {last_exc}"
+            ) from last_exc
 
         try:
             payload: dict[str, object] = response.json()
